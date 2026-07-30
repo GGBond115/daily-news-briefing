@@ -17,38 +17,68 @@ WINDOW = NOW - dt.timedelta(hours=48)
 QUERIES = {
     "中文信源版": {
         "国家政策简报": [
-            "国务院 部委 政策 OR 通知 when:2d",
-            "site:gov.cn 国务院 最新 政策 when:2d",
-            "国家部委 新规 发布 when:2d",
+            "site:gov.cn 国务院 政策 when:2d",
+            "site:gov.cn 部委 政策 通知 when:2d",
+            "site:news.cn 中国 政策 发布 when:2d",
         ],
         "国家重大经济政策速览": [
-            "央行 财政部 发改委 经济政策 when:2d",
+            "site:pbc.gov.cn OR site:mof.gov.cn OR site:ndrc.gov.cn 政策 when:2d",
             "site:gov.cn 经济 政策 发布 when:2d",
-            "中国 货币 财政 产业 政策 when:2d",
+            "site:news.cn 中国 经济 政策 when:2d",
         ],
         "国际重大新闻速览": [
-            "国际 重大新闻 突发 when:2d",
-            "国际局势 经济 地缘政治 when:2d",
-            "世界 要闻 最新 when:2d",
+            "site:news.cn 国际 重大 新闻 when:2d",
+            "site:people.com.cn 国际 突发 when:2d",
+            "site:cctv.com 国际 要闻 when:2d",
         ],
     },
     "非中文信源版": {
         "国家政策简报": [
-            "China government policy when:2d",
-            "China State Council policy when:2d",
-            "China regulation announcement when:2d",
+            "site:reuters.com China government policy when:2d",
+            "site:ft.com China policy when:2d",
+            "site:wsj.com China policy when:2d",
         ],
         "国家重大经济政策速览": [
-            "China economic policy PBOC fiscal when:2d",
-            "China central bank finance policy when:2d",
-            "China NDRC economic measures when:2d",
+            "site:reuters.com China PBOC fiscal policy when:2d",
+            "site:ft.com China economy policy when:2d",
+            "site:wsj.com China economy policy when:2d",
         ],
         "国际重大新闻速览": [
-            "world breaking news Reuters AP FT WSJ when:2d",
-            "global geopolitics economy breaking when:2d",
-            "international major news today when:2d",
+            "site:reuters.com world breaking news when:2d",
+            "site:apnews.com world breaking news when:2d",
+            "site:bbc.com/news world news when:2d",
+            "site:ft.com world news when:2d",
         ],
     },
+}
+
+# 只保留可追溯的一手机构或长期编辑部媒体。若当日条目不足，页面留空，
+# 不用地方公示、内容农场或二次转载补足数量。
+TRUSTED_SOURCES = {
+    "中文信源版": (
+        "中国政府网", "国务院", "新华网", "新华社", "人民日报", "人民网", "央视网",
+        "中国人民银行", "财政部", "国家发展和改革委员会", "商务部", "证监会",
+        "国家统计局", "海关总署", "中国新闻网",
+    ),
+    "非中文信源版": (
+        "Reuters", "Associated Press", "AP News", "Financial Times", "The Wall Street Journal",
+        "Bloomberg", "BBC", "The New York Times", "The Washington Post",
+    ),
+}
+
+SOURCE_PRIORITY = {
+    "中国政府网": 100, "国务院": 100, "中国人民银行": 100, "财政部": 100,
+    "国家发展和改革委员会": 100, "商务部": 100, "证监会": 100, "国家统计局": 100,
+    "海关总署": 100, "新华网": 90, "新华社": 90, "人民日报": 85, "人民网": 85,
+    "央视网": 85, "Reuters": 100, "Associated Press": 95, "AP News": 95,
+    "Financial Times": 90, "The Wall Street Journal": 90, "Bloomberg": 90,
+    "BBC": 85, "The New York Times": 85, "The Washington Post": 85,
+}
+
+SECTION_KEYWORDS = {
+    "国家政策简报": ("国务院", "政策", "通知", "决定", "条例", "办法", "regulation", "policy", "state council"),
+    "国家重大经济政策速览": ("央行", "财政", "发改", "货币", "金融", "税", "经济", "pbo c", "pboc", "fiscal", "monetary", "economy"),
+    "国际重大新闻速览": ("战争", "冲突", "制裁", "选举", "峰会", "贸易", "市场", "world", "war", "conflict", "sanction", "election", "summit", "trade"),
 }
 
 
@@ -89,10 +119,22 @@ def fetch_items(query: str, chinese: bool) -> list[dict[str, str]]:
     return results
 
 
-def dedupe(items: list[dict[str, str]], limit: int = 6) -> list[dict[str, str]]:
+def approved(item: dict[str, str], version: str) -> bool:
+    source = item["source"].casefold()
+    return any(name.casefold() in source for name in TRUSTED_SOURCES[version])
+
+
+def score(item: dict[str, str], section_name: str) -> tuple[int, str]:
+    source_score = max((weight for name, weight in SOURCE_PRIORITY.items() if name.casefold() in item["source"].casefold()), default=0)
+    title = item["title"].casefold()
+    relevance = sum(word.casefold() in title for word in SECTION_KEYWORDS[section_name])
+    return (source_score + relevance * 5, item["published"])
+
+
+def dedupe(items: list[dict[str, str]], version: str, section_name: str, limit: int = 6) -> list[dict[str, str]]:
     seen: set[str] = set()
     output: list[dict[str, str]] = []
-    for item in items:
+    for item in sorted((item for item in items if approved(item, version)), key=lambda item: score(item, section_name), reverse=True):
         key = item["title"].lower().replace(" ", "")[:80]
         if key in seen:
             continue
@@ -112,7 +154,7 @@ def card(item: dict[str, str]) -> str:
 
 def section(name: str, items: list[dict[str, str]]) -> str:
     if not items:
-        return f"<section><h3>{html.escape(name)}</h3><p class=\"empty\">过去 48 小时内未找到足够的可核验条目。</p></section>"
+        return f"<section><h3>{html.escape(name)}</h3><p class=\"empty\">过去 48 小时内，指定权威信源未检索到足够条目。</p></section>"
     primary = "".join(card(item) for item in items[:3])
     more = "".join(f'<li><a href="{html.escape(item["link"], quote=True)}" target="_blank" rel="noopener">{html.escape(item["title"])}</a></li>' for item in items[3:])
     more_block = f"<details><summary>更多新闻</summary><ul>{more}</ul></details>" if more else ""
@@ -127,8 +169,7 @@ def build() -> None:
             candidates: list[dict[str, str]] = []
             for query in queries:
                 candidates.extend(fetch_items(query, version == "中文信源版"))
-            candidates.sort(key=lambda item: item["published"], reverse=True)
-            items = dedupe(candidates)
+            items = dedupe(candidates, version, name)
             rendered.append(section(name, items))
         versions.append(f'<div class="version"><h2>{html.escape(version)}</h2>{"".join(rendered)}</div>')
     local_now = NOW.astimezone(dt.timezone(dt.timedelta(hours=8)))
