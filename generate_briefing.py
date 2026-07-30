@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import email.utils
 import html
+import json
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -136,6 +137,22 @@ def fetch_items(query: str, chinese: bool) -> list[dict[str, str]]:
     return results
 
 
+def translate_to_chinese(value: str) -> str:
+    """Translate only vetted foreign-source headlines for Chinese presentation."""
+    params = urllib.parse.urlencode({"client": "gtx", "sl": "en", "tl": "zh-CN", "dt": "t", "q": value})
+    request = urllib.request.Request(
+        "https://translate.googleapis.com/translate_a/single?" + params,
+        headers={"User-Agent": "daily-news-briefing/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        translated = "".join(part[0] for part in data[0] if part and part[0]).strip()
+        return translated or value
+    except Exception:
+        return value
+
+
 def approved(item: dict[str, str], version: str) -> bool:
     source = item["source"].casefold()
     return any(name.casefold() in source for name in TRUSTED_SOURCES[version])
@@ -171,7 +188,7 @@ def dedupe(items: list[dict[str, str]], version: str, section_name: str, limit: 
 
 
 def card(item: dict[str, str]) -> str:
-    title = html.escape(item["title"])
+    title = html.escape(item.get("display_title", item["title"]))
     source = html.escape(item["source"])
     published = html.escape(item["published"])
     return f'<article><a href="{html.escape(item["link"], quote=True)}" target="_blank" rel="noopener">{title}</a><p>{source} · {published}</p></article>'
@@ -181,7 +198,7 @@ def section(name: str, items: list[dict[str, str]]) -> str:
     if not items:
         return f"<section><h3>{html.escape(name)}</h3><p class=\"empty\">过去 48 小时内，指定权威信源未检索到足够条目。</p></section>"
     primary = "".join(card(item) for item in items[:3])
-    more = "".join(f'<li><a href="{html.escape(item["link"], quote=True)}" target="_blank" rel="noopener">{html.escape(item["title"])}</a></li>' for item in items[3:])
+    more = "".join(f'<li><a href="{html.escape(item["link"], quote=True)}" target="_blank" rel="noopener">{html.escape(item.get("display_title", item["title"]))}</a></li>' for item in items[3:])
     more_block = f"<details><summary>更多新闻</summary><ul>{more}</ul></details>" if more else ""
     return f"<section><h3>{html.escape(name)}</h3>{primary}{more_block}</section>"
 
@@ -195,6 +212,9 @@ def build() -> None:
             for query in queries:
                 candidates.extend(fetch_items(query, version == "中文信源版"))
             items = dedupe(candidates, version, name)
+            if version == "非中文信源版":
+                for item in items:
+                    item["display_title"] = translate_to_chinese(item["title"])
             rendered.append(section(name, items))
         versions.append(f'<div class="version"><h2>{html.escape(version)}</h2>{"".join(rendered)}</div>')
     local_now = NOW.astimezone(dt.timezone(dt.timedelta(hours=8)))
