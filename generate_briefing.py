@@ -81,6 +81,23 @@ SECTION_KEYWORDS = {
     "国际重大新闻速览": ("战争", "冲突", "制裁", "选举", "峰会", "贸易", "市场", "world", "war", "conflict", "sanction", "election", "summit", "trade"),
 }
 
+# 通过来源白名单后，仍须命中模块主题。这样 Reuters 的第三国政策消息，
+# 或新华社的地方民生报道，都不会被放进国家级栏目。
+REQUIRED_TITLE_TERMS = {
+    "中文信源版": {
+        "国家政策简报": ("国务院", "中央", "全国", "国家", "网信办", "药监局", "部", "委"),
+        "国家重大经济政策速览": ("国务院", "财政部", "央行", "人民银行", "发改委", "国家", "全国", "货币", "金融", "税"),
+        "国际重大新闻速览": ("国际", "全球", "美国", "俄罗斯", "乌克兰", "伊朗", "以色列", "欧洲", "联合国", "中东", "北约", "关税", "贸易"),
+    },
+    "非中文信源版": {
+        "国家政策简报": ("china", "chinese", "beijing", "state council"),
+        "国家重大经济政策速览": ("china", "chinese", "beijing", "pboc", "yuan"),
+        "国际重大新闻速览": ("world", "global", "iran", "israel", "ukraine", "russia", "europe", "trump", "war", "conflict", "sanction", "tariff", "trade"),
+    },
+}
+
+LOCAL_ONLY_TERMS = ("福州", "武汉", "重庆", "湖南", "广西", "江苏", "海南", "青岛", "潍坊", "张江", "经开区", "旅行社", "招生", "电梯")
+
 
 def rss_url(query: str, chinese: bool) -> str:
     params = {"q": query, "hl": "zh-CN" if chinese else "en-US", "gl": "CN" if chinese else "US", "ceid": "CN:zh-Hans" if chinese else "US:en"}
@@ -124,6 +141,13 @@ def approved(item: dict[str, str], version: str) -> bool:
     return any(name.casefold() in source for name in TRUSTED_SOURCES[version])
 
 
+def relevant(item: dict[str, str], version: str, section_name: str) -> bool:
+    title = item["title"].casefold()
+    if version == "中文信源版" and any(term.casefold() in title for term in LOCAL_ONLY_TERMS):
+        return False
+    return any(term.casefold() in title for term in REQUIRED_TITLE_TERMS[version][section_name])
+
+
 def score(item: dict[str, str], section_name: str) -> tuple[int, str]:
     source_score = max((weight for name, weight in SOURCE_PRIORITY.items() if name.casefold() in item["source"].casefold()), default=0)
     title = item["title"].casefold()
@@ -134,7 +158,8 @@ def score(item: dict[str, str], section_name: str) -> tuple[int, str]:
 def dedupe(items: list[dict[str, str]], version: str, section_name: str, limit: int = 6) -> list[dict[str, str]]:
     seen: set[str] = set()
     output: list[dict[str, str]] = []
-    for item in sorted((item for item in items if approved(item, version)), key=lambda item: score(item, section_name), reverse=True):
+    eligible = (item for item in items if approved(item, version) and relevant(item, version, section_name))
+    for item in sorted(eligible, key=lambda item: score(item, section_name), reverse=True):
         key = item["title"].lower().replace(" ", "")[:80]
         if key in seen:
             continue
