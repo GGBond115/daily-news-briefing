@@ -16,14 +16,38 @@ WINDOW = NOW - dt.timedelta(hours=48)
 
 QUERIES = {
     "中文信源版": {
-        "国家政策简报": "国务院 部委 最新 政策 OR 通知",
-        "国家重大经济政策速览": "中国 央行 财政部 发改委 经济 政策",
-        "国际重大新闻速览": "国际 重大 新闻 地缘政治 经济",
+        "国家政策简报": [
+            "国务院 部委 政策 OR 通知 when:2d",
+            "site:gov.cn 国务院 最新 政策 when:2d",
+            "国家部委 新规 发布 when:2d",
+        ],
+        "国家重大经济政策速览": [
+            "央行 财政部 发改委 经济政策 when:2d",
+            "site:gov.cn 经济 政策 发布 when:2d",
+            "中国 货币 财政 产业 政策 when:2d",
+        ],
+        "国际重大新闻速览": [
+            "国际 重大新闻 突发 when:2d",
+            "国际局势 经济 地缘政治 when:2d",
+            "世界 要闻 最新 when:2d",
+        ],
     },
     "非中文信源版": {
-        "国家政策简报": "China government policy latest",
-        "国家重大经济政策速览": "China economic policy PBOC finance latest",
-        "国际重大新闻速览": "world breaking news Reuters AP FT WSJ",
+        "国家政策简报": [
+            "China government policy when:2d",
+            "China State Council policy when:2d",
+            "China regulation announcement when:2d",
+        ],
+        "国家重大经济政策速览": [
+            "China economic policy PBOC fiscal when:2d",
+            "China central bank finance policy when:2d",
+            "China NDRC economic measures when:2d",
+        ],
+        "国际重大新闻速览": [
+            "world breaking news Reuters AP FT WSJ when:2d",
+            "global geopolitics economy breaking when:2d",
+            "international major news today when:2d",
+        ],
     },
 }
 
@@ -99,8 +123,12 @@ def build() -> None:
     versions: list[str] = []
     for version, sections in QUERIES.items():
         rendered = []
-        for name, query in sections.items():
-            items = dedupe(fetch_items(query, version == "中文信源版"))
+        for name, queries in sections.items():
+            candidates: list[dict[str, str]] = []
+            for query in queries:
+                candidates.extend(fetch_items(query, version == "中文信源版"))
+            candidates.sort(key=lambda item: item["published"], reverse=True)
+            items = dedupe(candidates)
             rendered.append(section(name, items))
         versions.append(f'<div class="version"><h2>{html.escape(version)}</h2>{"".join(rendered)}</div>')
     local_now = NOW.astimezone(dt.timezone(dt.timedelta(hours=8)))
